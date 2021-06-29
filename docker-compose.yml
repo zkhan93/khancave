@@ -1,0 +1,131 @@
+version: "3.9"
+
+services:
+
+  nginx-proxy:
+    build: ./proxy
+    labels:
+      com.github.jrcs.letsencrypt_nginx_proxy_companion.nginx_proxy: "true"
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - certs:/etc/nginx/certs:ro
+      - vhostd:/etc/nginx/vhost.d
+      - challenge:/usr/share/nginx/html
+    restart: always
+
+  letsencrypt:
+    image: jrcs/letsencrypt-nginx-proxy-companion:stable
+    environment:
+      - NGINX_PROXY_CONTAINER=nginx-proxy
+      - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
+    volumes:
+      - certs:/etc/nginx/certs
+      - vhostd:/etc/nginx/vhost.d
+      - challenge:/usr/share/nginx/html
+      - acme.sh:/etc/acme.sh
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: always
+    depends_on:
+      - nginx-proxy
+
+  calibre-web:
+    image: zkhan93/calibre-web:latest
+    environment:
+      - CALIBRE_DBPATH=/data
+      - VIRTUAL_HOST=${CALIBRE_DOMAIN}
+      - VIRTUAL_PORT=8083
+      - LETSENCRYPT_HOST=${CALIBRE_DOMAIN}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+    volumes:
+      - ${CALIBRE_WEB_DATA_DIR}:/data
+      - ${CALIBRE_LIBRARY_DIR}:/library
+    restart: always
+
+  aria2:
+    image: zkhan93/aria2-daemon:latest
+    ports:
+      - 6800:6800
+    volumes:
+      - downloads:/downloads
+      - completed:/completed
+    environment:
+      SECRET: ${ARIA2_RPC_SECRET}
+    restart: always
+
+  aria-web:
+    image: zkhan93/aria2-webui:latest      
+    environment:
+      - VIRTUAL_HOST=${ARIA2_DOMAIN}
+    restart: always
+
+  db:
+    image: arm32v7/postgres
+    ports:
+      - 5432
+    volumes:
+      - db:/var/lib/postgresql/data
+    environment:
+      - TZ=Asia/Kolkata
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${NEXTCLOUD_DB}
+      - POSTGRES_USER=${NEXTCLOUD_USER}
+    restart: always
+
+  nextcloud:
+    build: ./nextcloud 
+    #image: arm32v7/nextcloud:20.0-apache
+    environment:
+      - VIRTUAL_HOST=${NEXTCLOUD_DOMAIN}
+      - LETSENCRYPT_HOST=${NEXTCLOUD_DOMAIN}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${NEXTCLOUD_DB}
+      - POSTGRES_USER=${NEXTCLOUD_USER}
+      - POSTGRES_HOST=db
+      - NEXTCLOUD_TRUSTED_DOMAINS=localhost 127.0.0.1 ${NEXTCLOUD_DOMAIN}
+      - OVERWRITEPROTOCOL=https
+    volumes:
+      - nextcloud:/var/www/html
+      - ${NEXTCLOUD_USERS_DRIVE}/common:/drive/common
+      - ${NEXTCLOUD_USERS_DRIVE}/bushra:/drive/bushra
+      - ${NEXTCLOUD_USERS_DRIVE}/zeeshan:/drive/zeeshan
+      - ${NEXTCLOUD_USERS_DRIVE}/aalishan:/drive/aalishan
+      - ${NEXTCLOUD_USERS_DRIVE}/sarfaraz:/drive/sarfaraz
+    depends_on:
+      - db
+    restart: always
+
+
+volumes:
+  certs:
+  vhostd:
+  challenge:
+  acme.sh:
+  db:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ${DB_DATA_DIR}
+  nextcloud:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ${NEXTCLOUD_DIR}
+  downloads:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ${ARIA2_DOWNLOADS}
+  completed:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ${ARIA2_COMPLETED}
