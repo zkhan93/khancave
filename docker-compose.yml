@@ -1,68 +1,61 @@
 version: "3.9"
 
 services:
-
-  nginx-proxy:
-    build: ./proxy
-    labels:
-      com.github.jrcs.letsencrypt_nginx_proxy_companion.nginx_proxy: "true"
-    ports:
-      - 80:80
-      - 443:443
-    volumes:
-      - /var/run/docker.sock:/tmp/docker.sock:ro
-      - certs:/etc/nginx/certs:ro
-      - vhostd:/etc/nginx/vhost.d
-      - challenge:/usr/share/nginx/html
-    restart: always
-
-  letsencrypt:
-    image: jrcs/letsencrypt-nginx-proxy-companion:stable
-    environment:
-      - NGINX_PROXY_CONTAINER=nginx-proxy
-      - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
-    volumes:
-      - certs:/etc/nginx/certs
-      - vhostd:/etc/nginx/vhost.d
-      - challenge:/usr/share/nginx/html
-      - acme.sh:/etc/acme.sh
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    restart: always
-    depends_on:
-      - nginx-proxy
-
   calibre-web:
     image: zkhan93/calibre-web:latest
+    ports:
+      - 8083:8083
+    labels:
+      - traefik.enable=${TRAEFIK_ENABLE:-true}
+      - traefik.http.routers.khancave-calibre.rule=Host(`${CALIBRE_DOMAIN}`)
+      - traefik.http.routers.khancave-calibre.tls=true
+      - traefik.http.routers.khancave-calibre.tls.certresolver=le
     environment:
       - CALIBRE_DBPATH=/data
-      - VIRTUAL_HOST=${CALIBRE_DOMAIN}
-      - VIRTUAL_PORT=8083
-      - LETSENCRYPT_HOST=${CALIBRE_DOMAIN}
-      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
     volumes:
       - ${CALIBRE_WEB_DATA_DIR}:/data
       - ${CALIBRE_LIBRARY_DIR}:/library
+      - ${CALIBRE_IMPORT}:/import
     restart: always
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://192.168.1.7:3100/loki/api/v1/push"
 
   aria2:
     image: zkhan93/aria2-daemon:latest
     ports:
       - 6800:6800
+    labels:
+      - traefik.enable=${TRAEFIK_ENABLE:-true}
+      - traefik.http.routers.khancave-aria.rule=Host(`${ARIA2_DOMAIN}`) && Path(`/jsonrpc`)
+      - traefik.http.routers.khancave-aria.tls.certresolver=le
     volumes:
-      - downloads:/downloads
-      - completed:/completed
+      - aria2:/downloads
     environment:
       SECRET: ${ARIA2_RPC_SECRET}
     restart: always
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://192.168.1.7:3100/loki/api/v1/push"
 
   aria-web:
     image: zkhan93/aria2-webui:latest      
-    environment:
-      - VIRTUAL_HOST=${ARIA2_DOMAIN}
+    ports:
+      - 80
+    labels:
+      - traefik.enable=${TRAEFIK_ENABLE:-true}
+      - traefik.http.routers.khancave-aria-web.rule=Host(`${ARIA2_DOMAIN}`)
+      - traefik.http.routers.khancave-aria-web.tls.certresolver=le
     restart: always
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://192.168.1.7:3100/loki/api/v1/push"
 
   db:
-    image: arm32v7/postgres
+    image: postgres
     ports:
       - 5432
     volumes:
@@ -74,20 +67,25 @@ services:
       - POSTGRES_DB=${NEXTCLOUD_DB}
       - POSTGRES_USER=${NEXTCLOUD_USER}
     restart: always
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://192.168.1.7:3100/loki/api/v1/push"
 
   nextcloud:
     build: ./nextcloud 
-    #image: arm32v7/nextcloud:20.0-apache
+    labels:
+      - traefik.enable=${TRAEFIK_ENABLE:-true}
+      - traefik.http.routers.khancave-nextcloud.rule=Host(`${NEXTCLOUD_DOMAIN}`)
+      - traefik.http.routers.khancave-nextcloud.tls.certresolver=le
     environment:
-      - VIRTUAL_HOST=${NEXTCLOUD_DOMAIN}
-      - LETSENCRYPT_HOST=${NEXTCLOUD_DOMAIN}
-      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=${NEXTCLOUD_DB}
       - POSTGRES_USER=${NEXTCLOUD_USER}
       - POSTGRES_HOST=db
       - NEXTCLOUD_TRUSTED_DOMAINS=localhost 127.0.0.1 ${NEXTCLOUD_DOMAIN}
       - OVERWRITEPROTOCOL=https
+      - REDIS_HOST=redis
     volumes:
       - nextcloud:/var/www/html
       - ${NEXTCLOUD_USERS_DRIVE}/common:/drive/common
@@ -97,14 +95,22 @@ services:
       - ${NEXTCLOUD_USERS_DRIVE}/sarfaraz:/drive/sarfaraz
     depends_on:
       - db
+      - redis
     restart: always
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://192.168.1.7:3100/loki/api/v1/push"
 
+  redis:
+    image: redis:alpine
+    restart: always
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://192.168.1.7:3100/loki/api/v1/push"
 
 volumes:
-  certs:
-  vhostd:
-  challenge:
-  acme.sh:
   db:
     driver: local
     driver_opts:
@@ -117,15 +123,14 @@ volumes:
       o: bind
       type: none
       device: ${NEXTCLOUD_DIR}
-  downloads:
+  aria2:
     driver: local
     driver_opts:
       o: bind
       type: none
       device: ${ARIA2_DOWNLOADS}
-  completed:
-    driver: local
-    driver_opts:
-      o: bind
-      type: none
-      device: ${ARIA2_COMPLETED}
+
+networks:
+  default:
+    external: true
+    name: traefik_proxy
