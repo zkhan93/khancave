@@ -1,0 +1,56 @@
+version: "3"
+
+services:
+  proxy:
+    image: traefik:latest
+    ports:
+      - 80:80
+      - 443:443
+      - 8077:8077
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - certs:/letsencrypt
+    command:
+      - --api.insecure=true
+      - --log.level=${TRAEFIK_LOG_LEVEL:-ERROR}
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --accesslog
+      - --log
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.address=:80
+      - --entrypoints.traefik.address=:8077
+      # redirect http to https
+      - --entrypoints.web.http.redirections.entryPoint.to=websecure
+      - --entrypoints.web.http.redirections.entryPoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      # let's encrypt certificates
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.le.acme.email=${LETSENCRYPT_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      #- --certificatesresolvers.le.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+      # metrics
+      - --metrics.prometheus=true
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.simple-auth.basicauth.users=${SIMPLE_AUTH}
+      # Global redirection: https (www.) to https
+      #- "traefik.http.routers.trimwww.rule=HostRegexp(`{host:(www\\.).+}`)"
+      #- "traefik.http.routers.trimwww.entrypoints=websecure"
+      #- "traefik.http.routers.trimwww.tls=true"
+      #- "traefik.http.routers.trimwww.tls.certresolver=le"
+      #- "traefik.http.routers.trimwww.middlewares=trimwww"
+      # middleware=http(s)://(www.) to  https://
+      #- traefik.http.middlewares.trimwww.redirectregex.regex=^https?://www.(.*)
+      #- traefik.http.middlewares.trimwww.redirectregex.replacement=https://$${1}
+      #- traefik.http.middlewares.trimwww.redirectregex.permanent=true
+    restart: always
+    networks:
+      - proxy
+
+volumes:
+  certs:
+
+networks:
+  proxy:
